@@ -13,7 +13,17 @@ tidymodels_prefer()
 
 # 5 Spending our Data Budget
 
-## 5.1 Common Methods for Splitting Data
+Several steps to creating a useful model:
+
+-   Parameter estimation
+
+-   Model selection
+
+-   Tuning
+
+-   Performance assessment
+
+## 5.1 Common methods for splitting data
 
 When data are reused for multiple tasks, instead of carefully 'spent' from the finite data budget, certain risks increase, such as the risk of accentuating bias or compounding effects from methodological errors
 
@@ -57,6 +67,8 @@ set.seed(502)
 ames_split <- initial_split(ames, prop = .8, strata = log_sale_price)
 ames_train <- training(ames_split)
 ames_test <- testing(ames_split)
+
+dim(ames_train)
 ```
 
 Only one column can be used for stratification. **There is very little downside to using stratified sampling.**
@@ -66,6 +78,44 @@ Are there any cases where random sampling is not the best choice? Yes. One is wh
 There's complications in using time data. Too little data in the training set hampers the model's ability to find appropriate parameter estimates. Conversely, too little data in the test set lowers the quality of the performance estimates. Parts of the statistics community eschew test sets in general because they believe all of the data should be used for parameter estimation!! While there is merit to this argument, it is good modeling practice to have an unbiased set of observations as the final arbiter of model quality. A test set should be avoided only when the data are pathologically small.
 
 ## 5.2 What about a validation set?
+
+## 5.3 Multilevel data
+
+We are referring to the Ames housing data as being independent.
+
+Things that may not be independent:
+
+-   One person measured multiple times across an experiment
+
+-   One batch of product (individuals in the batch can be sampled from that batch a bunch of times)
+
+-   A tree could be one experimental unit, with (for instance) the tops and bottoms of a stem could be the data hierarchy
+
+Make sure that, when you're sampling data, that experimental units are contained in the training or test- there should be no instance of one unit having data in training and in test.
+
+## 5.4 Other considerations for a data budget
+
+1.  quarantine test set from any model building activities, not doing this leads to "information leakage"
+
+2.  subsample the training data where necessary to address issues like class imbalances
+
+3.  use chapter 10 materials to avoid using the same data for different tasks
+
+4.  normally in real-life people will use the entire data set for parameter estimation
+
+## 5.5 Summary
+
+```{r}
+library(tidymodels)
+data(ames)
+ames <- clean_names(ames)
+ames <- ames %>% mutate(log_sale_price = log10(sale_price))
+
+set.seed(502)
+ames_split <- initial_split(ames, prop = 0.80, strata = log_sale_price)
+ames_train <- training(ames_split)
+ames_test  <-  testing(ames_split)
+```
 
 # 6 Fitting Models with `parsnip`
 
@@ -170,4 +220,249 @@ ames_test_small %>%
             lm_form_fit, ames_test_small, type = "pred_int"
         )
     )
+```
+
+## 6.4 `parsnip`-extension packages
+
+## 6.5 Creating model specifications
+
+You can use RStudio addins to make model specification easier.
+
+```{r}
+# parsnip_addin()
+```
+
+## 6.5 Summary
+
+```{r}
+library(tidymodels)
+data(ames)
+ames <- clean_names(ames)
+ames <- mutate(ames, log_sale_price = log10(sale_price))
+
+set.seed(502)
+ames_split <- initial_split(ames, prop = 0.80, strata = log_sale_price)
+ames_train <- training(ames_split)
+ames_test  <-  testing(ames_split)
+
+lm_model <- linear_reg() %>% set_engine("lm")
+```
+
+# 7 A Model Workflow
+
+Workflows are important for 2 reasons:
+
+1.  It encourages good methodology
+
+2.  It enables better organization of objects
+
+## 7.1 Where does the model begin and end?
+
+For some straightforward data sets, fitting the model itself may be the entire process. There can be extra steps before that, though:
+
+-   We may have more variables than we want, so we remove some by knowledge or by variable selection
+
+-   There may be missing data that we want to interpolate using correlation
+
+-   We may want to transform the scale of a variable
+
+We might also want to change things like thresholds for classification (should 50% be the threshold? or maybe more stringent?)
+
+Think of modeling more holistically, not just fitting data to algorithms.
+
+## 7.2 Workflow basics
+
+Start with `ames`
+
+```{r}
+library(tidymodels)
+tidymodels_prefer()
+
+lm_model <- linear_reg() |> 
+    set_engine('lm')
+```
+
+A workflow ALWAYS requires a `parsnip` model object:
+
+```{r}
+lm_wflow <- workflow() |> 
+    add_model(lm_model)
+
+lm_wflow
+```
+
+so `lm_model` is the `parsnip` model, and now we've created a workflow object.
+
+See how the output above says "Preprocessor: None". We haven't defined how to preprocess the data.
+
+If the model is simple, a standard R formula can be used as a preprocessor:
+
+```{r}
+lm_wflow <- lm_wflow |> 
+    add_formula(log_sale_price ~ longitude + latitude)
+
+lm_wflow
+```
+
+We can add the formula without the data.
+
+Workflows have a `fit()` method that can be used to create the model.
+
+```{r}
+lm_fit <- fit(lm_wflow, ames_train)
+lm_fit
+```
+
+We can also `predict()` on the fitted workflow:
+
+```{r}
+predict(lm_fit, ames_test |> slice(1:5))
+```
+
+The model and the preprocessor can be removed or updated:
+
+```{r}
+lm_fit |> update_formula(log_sale_price ~ longitude)
+```
+
+## 7.3 Adding raw variables to the `workflow()`
+
+We can also add data to the model using the `add_variables()` function, which uses a dplyr-like syntax for choosing variables. The function has two arguments: `outcomes` and `predictors`.
+
+```{r}
+lm_wflow <- lm_wflow |> 
+    remove_formula() |> 
+    add_variables(outcome = log_sale_price, predictors = c(longitude, latitude))
+
+lm_wflow
+```
+
+You can also use a more general selector such as
+
+```{r include = F}
+predictors = c(ends_with("tude"))
+```
+
+Now when fit is called, the specification assembles the data into a data frame and passes it tot he underlying function:
+
+```{r}
+fit(lm_wflow, ames_train)
+```
+
+## 7.4 How does a `workflow()` use the formula?
+
+### Tree-based models
+
+### 7.4.1 Special formulas and inline functions
+
+Many multilevel models have a standardized formula devised in the `lme4` package. Like this, where we fit a regression model that has random effects for subjects:
+
+```{r}
+library(lme4)
+library(nlme)
+lmer(distance ~ Sex + (age | Subject), data = Orthodont)
+```
+
+This doesn't work super well with R.
+
+```{r}
+model.matrix(distance ~ Sex + (age | Subject), data = Orthodont)
+```
+
+\-\-\-\-- This is starting to get a little too complex for what I think I need right now
+
+## 7.5 Creating multiple workflows at once
+
+We may want many modeling attempts. Like if we're predicting, we may want to try many model types. Or if we're trying to add or remove variables sequentially.
+
+The `workflowset` package helps with this.
+
+As an example, let's say that we want to focus on the different ways that house location is represented in the Ames data. We can create a set of formulas that capture these predictors:
+
+```{r}
+location <- list(
+    longitude = log_sale_price ~ longitude,
+    latitude = log_sale_price ~ latitude,
+    coords = log_sale_price ~ longitude + latitude,
+    neighborhood = log_sale_price ~ neighborhood
+)
+```
+
+Now we can throw these locations through `workflow_set()` for something like the previous linear model specification:
+
+```{r}
+library(workflowsets)
+location_models <- workflow_set(preproc = location, models = list(lm = lm_model))
+location_models
+```
+
+```{r}
+location_models$info[[1]]
+```
+
+```{r}
+extract_workflow(location_models, id = "coords_lm")
+```
+
+Let's create fits for all of these formula and save them in a new column called `fit`.
+
+```{r}
+location_models <- location_models |> 
+    mutate(fit = map(info, ~ fit(.x$workflow[[1]], ames_train)))
+location_models
+```
+
+```{r}
+location_models$fit[[1]]
+```
+
+## 7.6 Evaluating the test set
+
+Once we're done fitting a model, there's a convenience function called `last_fit` that we can fit the model to the entire training set it and evaluate it with the testing set.
+
+Using `lm_wflow` as an example, we can pass the model and the initial training/testing split to the function:
+
+```{r}
+final_lm_res <- last_fit(lm_wflow, ames_split)
+final_lm_res
+```
+
+The `.workflow` column contains the fitted workflow:
+
+```{r}
+fitted_lm_wflow <- extract_workflow(final_lm_res)
+```
+
+Then we can collect metrics with `collect_metrics()` and predictions with `collect_predictions()`:
+
+```{r}
+collect_metrics(final_lm_res)
+```
+
+```{r}
+collect_predictions(final_lm_res)
+```
+
+## 7.7 Chapter summary
+
+```{r}
+library(tidymodels)
+data(ames)
+ames <- clean_names(data(ames))
+
+ames <- mutate(ames, log_sale_price = log10(sale_price))
+
+set.seed(502)
+ames_split <- initial_split(ames, prop = 0.80, strata = log_sale_price)
+ames_train <- training(ames_split)
+ames_test  <-  testing(ames_split)
+
+lm_model <- linear_reg() %>% set_engine("lm")
+
+lm_wflow <- 
+  workflow() %>% 
+  add_model(lm_model) %>% 
+  add_variables(outcome = log_sale_price, predictors = c(longitude, latitude))
+
+lm_fit <- fit(lm_wflow, ames_train)
 ```
