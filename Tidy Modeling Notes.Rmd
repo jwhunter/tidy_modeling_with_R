@@ -9,6 +9,9 @@ output: html_notebook
 library(tidymodels)
 library(tidyverse)
 tidymodels_prefer()
+library(janitor)
+library(ggplot2)
+library(dplyr)
 ```
 
 # 5 Spending our Data Budget
@@ -448,7 +451,7 @@ collect_predictions(final_lm_res)
 ```{r}
 library(tidymodels)
 data(ames)
-ames <- clean_names(data(ames))
+ames <- clean_names(ames)
 
 ames <- mutate(ames, log_sale_price = log10(sale_price))
 
@@ -466,3 +469,73 @@ lm_wflow <-
 
 lm_fit <- fit(lm_wflow, ames_train)
 ```
+
+# 8 Feature Engineering with `recipes`
+
+Feature engineering: reformatting predictors to make them easier for a model to use.
+
+Take the Ames data for example: there are many ways to represent features of the house, but we might want to choose an optino we believe is moset associated with the outcome.
+
+Other examples of preprocesing to build better features include:
+
+-   Reducing correlation between predictors by removing predictors or using feature extraction
+
+-   Imputing missing data using a sub-model
+
+-   Coercing some skewed variables to be symmetric
+
+## 8.1 A simple `recipe()` for the Ames housing data
+
+Focusing on a few predictors:
+
+-   Neighborhood (qualitative)
+
+-   Gross above-grade living area (continuous)
+
+-   Year built
+
+-   Type of building
+
+Suppose an initial linear regression were fit to these data. That might look like:
+
+```{r}
+lm(log_sale_price ~ neighborhood + log10(gr_liv_area) + year_built + bldg_type, data = ames)
+```
+
+This was a series of steps:
+
+1.  Outcome and predictors were defined
+
+2.  Log transformation was applied to living area predictor
+
+3.  Neighborhood and building types are converted to numeric
+
+The equivalent looks like this:
+
+```{r}
+simple_ames <- ames_train |> 
+    recipe(log_sale_price ~ neighborhood + gr_liv_area + year_built + bldg_type) |>
+    step_log(gr_liv_area, base = 10) |> 
+    step_dummy(all_nominal_predictors())
+simple_ames
+```
+
+Broken down:
+
+1.  `recipe` tells the *roles* of the "ingredients" (ie what is predictor or outcome)
+
+2.  `step_log` declares `gr_liv_area` to be log transformed
+
+3.  `step_dummy` specifies which variables should be converted to binary dummy variables
+
+What's the advantage of using a recipe instead of the original version?
+
+-   Computations can be recycled across models
+
+-   Broader set of data processing choices
+
+-   Syntax can be compact, like in `all_nominal_predictors`
+
+-   Processing can be captured in *objects*, instead of in scripts
+
+## 8.2 Using `recipes`
