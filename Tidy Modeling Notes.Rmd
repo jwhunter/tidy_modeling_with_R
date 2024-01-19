@@ -12,6 +12,15 @@ tidymodels_prefer()
 library(janitor)
 library(ggplot2)
 library(dplyr)
+
+data(ames)
+ames <- clean_names(ames)
+ames <- ames %>% mutate(log_sale_price = log10(sale_price))
+
+set.seed(502)
+ames_split <- initial_split(ames, prop = 0.80, strata = log_sale_price)
+ames_train <- training(ames_split)
+ames_test  <-  testing(ames_split)
 ```
 
 # 5 Spending our Data Budget
@@ -343,7 +352,7 @@ lm_wflow
 You can also use a more general selector such as
 
 ```{r include = F}
-predictors = c(ends_with("tude"))
+# predictors = c(ends_with("tude"))
 ```
 
 Now when fit is called, the specification assembles the data into a data frame and passes it tot he underlying function:
@@ -372,7 +381,7 @@ This doesn't work super well with R.
 model.matrix(distance ~ Sex + (age | Subject), data = Orthodont)
 ```
 
-\-\-\-\-- This is starting to get a little too complex for what I think I need right now
+----- This is starting to get a little too complex for what I think I need right now
 
 ## 7.5 Creating multiple workflows at once
 
@@ -539,3 +548,102 @@ What's the advantage of using a recipe instead of the original version?
 -   Processing can be captured in *objects*, instead of in scripts
 
 ## 8.2 Using `recipes`
+
+You can add recipes to objects...
+
+```{r}
+# lm_wflow |> 
+#     add_recipe(simple_ames)
+```
+
+but this doesn't work! Why?
+
+It's because lm_wflow already has a recipe.
+
+```{r}
+lm_wflow
+```
+
+See? There's a Preprocessor attached already.
+
+So we have to remove that guy.
+
+```{r}
+lm_wflow <- lm_wflow |> 
+    remove_variables() |> 
+    add_recipe(simple_ames)
+
+lm_wflow
+```
+
+Ta-dah!
+
+Let's estimate both the recipe and the model using a simple call to `fit`.
+
+```{r}
+lm_fit <- fit(lm_wflow, ames_train)
+```
+
+`predict` applies the preprocessing that was used on the training set to new data, so we don't have to do stuff to that testing set. Easy!
+
+```{r}
+predict(lm_fit, ames_test |> slice(1:3))
+```
+
+If we need the model or recipe as objects, we can `extract` them.
+
+```{r}
+lm_fit |> 
+    extract_recipe(estimated = T)
+```
+
+We can also tidy the fit:
+
+```{r}
+lm_fit |> 
+    extract_fit_parsnip() |> 
+    tidy() |> 
+    slice(1:5)
+```
+
+## 8.3 How data are used by the `recipe`
+
+Data are passed to recipes at different stages:
+
+1.  When calling `recipe(..., data)` so it knows what the types of the columns are
+
+2.  When preparing the data using `fit(workflow, data)`, for estimation operations
+
+3.  When using `predict(workflow, new_data)`
+
+## 8.4 Examples of `recipe` steps
+
+### 8.4.1 Encoding qualitative data in a numeric format
+
+We may want to refactor some qualitative data, like in `ames` where we have tiny neighborhoods:
+
+```{r}
+ames |> 
+    group_by(neighborhood) |> 
+    mutate(neighborhood_count = n()) |> 
+    ungroup() |> 
+    mutate(neighborhood = fct_infreq(neighborhood)) |> 
+    ggplot(aes(y = neighborhood, fill = neighborhood_count <= 10)) +
+    geom_bar() +
+    theme(legend.position = 'bottom')
+```
+
+For something like this, we can use `step_other(neighborhood, threshold = 0.025)` to our recipe and the bottom 2.5% of neighborhoods will be lumped into an "other" bucket.
+
+```{r}
+simple_ames <-
+    ames_train |> 
+    recipe(
+        log_sale_price ~ neighborhood + gr_liv_area + year_built + bldg_type
+    ) |> 
+    step_log(gr_liv_area, base = 10) |> 
+    step_other(neighborhood, threshold = 0.025) |> 
+    step_dummy(all_nominal_predictors())
+```
+
+### 8.4.2 Interaction terms
