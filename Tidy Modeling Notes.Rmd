@@ -647,3 +647,272 @@ simple_ames <-
 ```
 
 ### 8.4.2 Interaction terms
+
+Notice that, in the Ames training set, we see that regression slopes for the gross living area differ for different building types:
+
+```{r}
+ames_train |> 
+    ggplot(
+        aes(
+            x = gr_liv_area,
+            y = 10^log_sale_price
+        )
+    ) +
+    geom_point(alpha = .2) +
+    facet_wrap(~ bldg_type) +
+    geom_smooth(
+        method = lm,
+        formula = y ~ x,
+        se = F,
+        color = 'lightblue'
+    ) +
+    scale_x_log10() +
+    scale_y_log10() +
+    labs(
+        x = "Gross Living Area",
+        y = "Sale Price (USD)"
+    )
+```
+
+This is a signal to use an interaction term. We can do that with `:` or `*`:
+
+```{r}
+simple_ames <- ames_train |> 
+    recipe(
+        log_sale_price ~ 
+            neighborhood +
+            gr_liv_area +
+            year_built +
+            bldg_type
+    ) |> 
+    step_log(gr_liv_area, base = 10) |> 
+    step_other(neighborhood, threshold = 0.1) |> 
+    step_dummy(all_nominal_predictors()) |> 
+    step_interact(
+        ~ gr_liv_area:starts_with("Bldg_Type_")
+    )
+```
+
+### 8.4.3 Spline functions
+
+Consider how sale price relates to latitude:
+
+```{r}
+library(patchwork)
+library(splines)
+
+plot_smoother <- function(deg_free) {
+    ames_train |> 
+        ggplot(aes(latitude, 10^log_sale_price)) +
+        geom_point(alpha = .2) +
+        scale_y_log10() +
+        geom_smooth(
+            method = lm,
+            formula = y ~ ns(x, df = deg_free),
+            color = 'lightblue',
+            se = F
+        ) +
+        labs(
+            title = paste(deg_free, "Spline Terms"),
+            y = "Sale Price (USD)"
+        )
+}
+
+(plot_smoother(2) + plot_smoother(5)) /
+    (plot_smoother(20) + plot_smoother(100))
+```
+
+So there's a nonlinear trend, but we don't want to overfit it.
+
+Here's how we might account for that in recipes:
+
+```{r}
+ames_train |> 
+    recipe(
+        log_sale_price ~
+            neighborhood +
+            gr_liv_area +
+            year_built +
+            bldg_type +
+            latitude
+    ) |> 
+    step_log(gr_liv_area, base = 10) |> 
+    step_other(neighborhood, threshold = .01) |> 
+    step_dummy(all_nominal_predictors()) |> 
+    step_interact(~gr_liv_area:starts_with("Bldg_Type_")) |> 
+    step_ns(latitude, deg_free = 20)
+```
+
+### 8.4.4 Feature extraction
+
+Another common method for representing multiple features at once is called *feature extraction*. PCA is a type of feature extraction, where we take the information from the data and try to make new fields from it with the benefit of reduced correlation.
+
+In our Ames data, we have fields measuring very similar concepts of area:
+
+```{r}
+ames_train |> 
+    select(total_bsmt_sf, first_flr_sf, gr_liv_area) |> 
+    plot()
+```
+
+PCA might be an option to represent these potentially redundant variables as a smaller feature set (simplicity, hooray!).
+
+The snippet could look like this:
+
+`step_pca(matches("(SF$)|(Gr_Liv)"))`
+
+This uses string matching on the relevant fields.
+
+**Note** that PCA assumes that all variables are on the same scale (square feet, in this case) (we could precede that step by calling `step_normalize` which would center and scale each column).
+
+### 8.4.5 Row sampling steps
+
+We can use row sampling to combat class imbalances. This doesn't really help with performance, but it can improve distributions which is nice.
+
+You can `step_downsample` to keep the minority class and take a random sample of the majority so that class frequencies are balanced.
+
+You can `step_upsample` to replicate samples from the minority class.
+
+Or you can use hybrid methods to combine both.
+
+### 8.4.6 General transformations
+
+You can also `step_mutate` thank GOD.
+
+### 8.4.7 Natural language processing
+
+Try the `textrecipes` package to open up tokenizing features.
+
+## 8.5 Skipping steps for new data
+
+The sale price data are already log transformed in the `ames` data frame. So why not use:
+
+`step_log(sale_price, base = 10)`
+
+We don't do this because eventually we'll want to pass unknown sale prices to this model and it will cause a crash.
+
+Basically, if you want to fiddle with the outcome, do it outside of a recipe.
+
+**BUT** there are times when that's not sufficient! Imagine you want to downsample for one selection of training, but you don't want to do that anymore for prediction. Simply set `skip = T` in any `step` function, and it'll be skipped in `predict`.
+
+**DOUBLE BUT all steps are applied when using fit!**
+
+## 8.6 Tidy a `recipe()`
+
+`tidy()` can be used to make a recipe look real pretty.
+
+```{r}
+ames_rec <- ames_train |> 
+    recipe(
+        log_sale_price ~
+            neighborhood +
+            gr_liv_area +
+            year_built +
+            bldg_type +
+            latitude +
+            longitude
+    ) |> 
+    step_log(gr_liv_area, base = 10) |> 
+    step_other(neighborhood, threshold = 0.01) |> 
+    step_dummy(all_nominal_predictors()) |> 
+    step_interact(~gr_liv_area:starts_with("Bldg_Type_")) |> 
+    step_ns(latitude, longitude, deg_free = 20)
+
+ames_rec
+```
+
+Look at what `tidy` does:
+
+```{r}
+tidy(ames_rec)
+```
+
+Handy for identifying idnividual steps
+
+You can specify id's when you want to:
+
+```{r}
+ames_rec <- ames_train |> 
+    recipe(
+        log_sale_price ~
+            neighborhood +
+            gr_liv_area +
+            year_built +
+            bldg_type +
+            latitude +
+            longitude
+    ) |> 
+    step_log(gr_liv_area, base = 10) |> 
+    step_other(neighborhood, threshold = 0.01, id = "my_id") |> 
+    step_dummy(all_nominal_predictors()) |> 
+    step_interact(~gr_liv_area:starts_with("Bldg_Type_")) |> 
+    step_ns(latitude, longitude, deg_free = 20)
+
+tidy(ames_rec)
+```
+
+Let's refit the workflow with the new recipe:
+
+```{r}
+lm_wflow <- workflow() |> 
+    add_model(lm_model) |> 
+    add_recipe(ames_rec)
+
+lm_fit <- fit(lm_wflow, ames_train)
+```
+
+Our changing of `step_other`'s `id` is real useful here because we can look at the factor levels effected by `step_other`, or where `id = "my_id"`:
+
+```{r}
+estimated_recipe <- lm_fit |> 
+    extract_recipe(estimated = T)
+
+tidy(estimated_recipe, id = "my_id")
+```
+
+You can also call a numbered step with `number = n` instead of `id = t`.
+
+## 8.7 Column roles
+
+Maybe we want a role other than predictor or outcome. Take a look at this, considering the column called `address` that was in the original raw data for Ames:
+
+`ames_rec |> update_role(address, new_role = "street address"`
+
+## 8.8 Chapter summary
+
+```{r}
+library(tidymodels)
+data(ames)
+ames <- clean_names(ames)
+ames <- mutate(ames, log_sale_price = log10(sale_price))
+
+set.seed(502)
+ames_split <- initial_split(ames, prop = 0.80, strata = log_sale_price)
+ames_train <- training(ames_split)
+ames_test  <-  testing(ames_split)
+
+ames_rec <- ames_train |> 
+  recipe(
+      sale_price ~ 
+          neighborhood + 
+          gr_liv_area + 
+          year_built + 
+          bldg_type + 
+          latitude + 
+          longitude
+      ) %>%
+      step_log(gr_liv_area, base = 10) %>% 
+      step_other(neighborhood, threshold = 0.01) %>% 
+      step_dummy(all_nominal_predictors()) %>% 
+      step_interact( ~ gr_liv_area:starts_with("Bldg_Type_") ) %>%
+      step_ns(latitude, longitude, deg_free = 20)
+  
+lm_model <- linear_reg() %>% set_engine("lm")
+
+lm_wflow <- 
+  workflow() %>% 
+  add_model(lm_model) %>% 
+  add_recipe(ames_rec)
+
+lm_fit <- fit(lm_wflow, ames_train)
+```
